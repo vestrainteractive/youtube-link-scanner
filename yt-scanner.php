@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: YouTube Link Scanner
- * Description: Scans all published posts for YouTube links that are broken, under 1 minute, have '[moved]' in the title, or have <100 views and are older than 6 months. Flags copyright/revenue share videos.
- * Version: 0.1.00
+ * Description: Scans all published posts for YouTube links that are broken, under 1 minute, have '[moved]' in the title, or have < 100 views and are older than 6 months.
+ * Version: 0.0.90
  * Author: Vestra Interactive
  */
 
@@ -19,7 +19,7 @@ add_action('admin_enqueue_scripts', function($hook) {
 });
 
 function yt_scanner_page() {
-    echo '<div class="wrap"><h1>YouTube Link Scanner</h1>';
+    echo '<div class="wrap"><h1>YouTube Link Scanner <span style="font-size:0.8em">by <a href="https://vestrainteractive.com/?mtm_campaign=PluginLinks&mtm_source=yt-link-scanner&mtm_medium=wordpress" target="_blank"</a></span></h1>';
     
     $api_key = get_option('yt_scanner_api_key', '');
     $api_error_message = '';
@@ -51,10 +51,8 @@ function yt_scanner_page() {
         echo '<div style="color: red; margin-top: 10px;">API Error: ' . esc_html($api_error_message) . '</div>';
     }
     
-    echo '<hr>
-          <p><strong>Legend:</strong> <span style="color:red;">Broken</span>, <span style="color:green;">Low Views</span>, <span style="color:orange;">Moved/Short</span>, <strong style="color:orange;">Copyright</strong></p>
-          <button id="start-scan">Start Scan</button>
-          <div id="scan-status" style="margin-top: 20px;"></div>';
+    echo '<hr><button id="start-scan">Start Scan</button>';
+    echo '<div id="scan-status" style="margin-top: 20px;"></div>';
     echo '</div>';
 }
 
@@ -85,7 +83,7 @@ add_action('wp_ajax_yt_scan_batch', function() {
         
         if (!empty($matches[1])) {
             foreach ($matches[1] as $video_id) {
-                $api_url = "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics,status&id={$video_id}&key={$api_key}";
+                $api_url = "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id={$video_id}&key={$api_key}";
                 $response = wp_remote_get($api_url, ['timeout' => 10]);
                 $data = json_decode(wp_remote_retrieve_body($response), true);
                 
@@ -96,24 +94,12 @@ add_action('wp_ajax_yt_scan_batch', function() {
                     $views = isset($video['statistics']['viewCount']) ? (int)$video['statistics']['viewCount'] : 0;
                     $published_at = strtotime($video['snippet']['publishedAt']);
                     $six_months_ago = strtotime('-6 months');
-                    $status = isset($video['status']['uploadStatus']) ? $video['status']['uploadStatus'] : '';
-                    $labels = [];
                     
                     if (strpos(strtolower($title), '[moved]') !== false ||
+                        $views < 100 && $published_at < $six_months_ago || //change 100 to your preferred view count.
                         preg_match('/PT([0-9]{1,2})M?([0-9]{1,2})?S?/', $duration, $time_matches) && ($time_matches[1] == 0 && (!isset($time_matches[2]) || $time_matches[2] < 60))) {
-                        $labels[] = '<span style="color: orange;">Moved/Short</span>';
+                        $scanned[] = "<a href='" . get_edit_post_link($post->ID) . "' target='_blank'>Edit Post: " . esc_html($post->post_title) . "</a> - Video ID: " . esc_html($video_id);
                     }
-                    if ($views < 100 && $published_at < $six_months_ago) {
-                        $labels[] = '<span style="color: green;">Low Views</span>';
-                    }
-                    if ($status === 'rejected') {
-                        $labels[] = '<strong style="color: orange;">Copyright</strong>';
-                    }
-                    if (empty($labels)) {
-                        $labels[] = '<span style="color: red;">Broken</span>';
-                    }
-                    
-                    $scanned[] = "<a href='" . get_edit_post_link($post->ID) . "' target='_blank'>Edit Post: " . esc_html($post->post_title) . "</a> - Video ID: " . esc_html($video_id) . " (" . implode(', ', $labels) . ")";
                 }
             }
         }
