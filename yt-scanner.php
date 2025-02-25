@@ -1,111 +1,140 @@
 <?php
-/**
- * Plugin Name: YouTube Link Scanner
- * Description: Scans all published posts for YouTube links that are broken, under 1 minute, have '[moved]' in the title, or have < 100 views and are older than 6 months.
- * Version: 0.0.90
- * Author: Vestra Interactive
- */
+/*
+Plugin Name: YouTube Post Scanner
+Description: Scans published posts for YouTube links and fetches video details using the YouTube API.
+Version: 1.0
+Author: Vestra Interactive
+*/
 
 if (!defined('ABSPATH')) exit;
 
-add_action('admin_menu', function() {
-    add_menu_page('YouTube Scanner', 'YouTube Scanner', 'manage_options', 'youtube-scanner', 'yt_scanner_page');
-});
+class YouTubePostScanner {
+    private $option_name = 'yt_api_key';
 
-add_action('admin_enqueue_scripts', function($hook) {
-    if ($hook !== 'toplevel_page_youtube-scanner') return;
-    wp_enqueue_script('yt-scanner-js', plugin_dir_url(__FILE__) . 'yt-scanner.js', ['jquery'], null, true);
-    wp_localize_script('yt-scanner-js', 'ytScannerAjax', ['ajax_url' => admin_url('admin-ajax.php')]);
-});
+    public function __construct() {
+        add_action('admin_menu', [$this, 'create_admin_page']);
+        add_action('wp_ajax_start_scan', [$this, 'start_scan']);
+        add_action('wp_ajax_save_api_key', [$this, 'save_api_key']);
+    }
 
-function yt_scanner_page() {
-    echo '<div class="wrap"><h1>YouTube Link Scanner <span style="font-size:0.8em">by <a href="https://vestrainteractive.com/?mtm_campaign=PluginLinks&mtm_source=yt-link-scanner&mtm_medium=wordpress" target="_blank"</a></span></h1>';
-    
-    $api_key = get_option('yt_scanner_api_key', '');
-    $api_error_message = '';
-    
-    if (isset($_POST['yt_api_key'])) {
-        update_option('yt_scanner_api_key', sanitize_text_field($_POST['yt_api_key']));
-        $api_key = get_option('yt_scanner_api_key', '');
-        
-        // Quick API check
-        $test_url = "https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key={$api_key}";
-        $response = wp_remote_get($test_url, ['timeout' => 10]);
-        
-        if (is_wp_error($response)) {
-            $api_error_message = $response->get_error_message();
-        } else {
-            $data = json_decode(wp_remote_retrieve_body($response), true);
-            if (isset($data['error'])) {
-                $api_error_message = $data['error']['message'];
-            }
-        }
+    public function create_admin_page() {
+        add_menu_page('YouTube Scanner', 'YouTube Scanner', 'manage_options', 'youtube-scanner', [$this, 'render_admin_page']);
     }
-    
-    echo '<form method="post">
-            <input type="text" name="yt_api_key" value="' . esc_attr($api_key) . '" placeholder="Enter YouTube API Key" required> 
-            <button type="submit">Save</button>
-          </form>';
-    
-    if ($api_error_message) {
-        echo '<div style="color: red; margin-top: 10px;">API Error: ' . esc_html($api_error_message) . '</div>';
-    }
-    
-    echo '<hr><button id="start-scan">Start Scan</button>';
-    echo '<div id="scan-status" style="margin-top: 20px;"></div>';
-    echo '</div>';
-}
 
-add_action('wp_ajax_yt_scan_batch', function() {
-    global $wpdb;
-    $api_key = get_option('yt_scanner_api_key', '');
-    
-    if (!$api_key) {
-        wp_send_json_error('No API key set.');
-    }
-    
-    $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
-    $posts_per_batch = 50;
-    $posts = $wpdb->get_results($wpdb->prepare("SELECT ID, post_title, post_content FROM {$wpdb->posts} WHERE post_status = 'publish' LIMIT %d OFFSET %d", $posts_per_batch, $offset));
-    
-    if (empty($posts)) {
-        wp_send_json_success(['done' => true]);
-    }
-    
-    $scanned = [];
-    $youtube_regex = '/(?:https?:\\/\\/)?(?:www\\.)?(?:youtube\\.com\\/watch\\?v=|youtu\\.be\\/|googlevideo\\.com\\/videoplayback\\?.*?id=)([a-zA-Z0-9_-]{11})/i';
-    
-    foreach ($posts as $post) {
-        if (!isset($post->post_content)) continue;
-        $matches = [];
+    public function render_admin_page() {
+        $api_key = get_option($this->option_name, '');
+        ?>
+        <div class="wrap">
+            <h1>YouTube Post Scanner</h1>
+            <label for="yt_api_key">YouTube API Key:</label>
+            <input type="text" id="yt_api_key" value="<?php echo esc_attr($api_key); ?>">
+            <button id="save_api_key" class="button button-primary">Save API Key</button>
+            <button id="start_scan" class="button button-secondary">Start Scan</button>
+            <button id="stop_scan" class="button button-secondary">Stop Scan</button>
+            <div id="scan_results"></div>
+        </div>
+        <script>
+        jQuery(document).ready(function($) {
+            $('#save_api_key').click(function() {
+                $.post(ajaxurl, {action: 'save_api_key', api_key: $('#yt_api_key').val()}, function(response) {
+                    alert(response);
+                });
+            });
+            
+            $('#start_scan').click(function() {
+                $('#scan_results').html('<p>Scanning...</p>');
+                scanPosts(0);
+            });
         
-        preg_match_all($youtube_regex, $post->post_content, $matches);
-        
-        if (!empty($matches[1])) {
-            foreach ($matches[1] as $video_id) {
-                $api_url = "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id={$video_id}&key={$api_key}";
-                $response = wp_remote_get($api_url, ['timeout' => 10]);
-                $data = json_decode(wp_remote_retrieve_body($response), true);
-                
-                if (isset($data['items'][0])) {
-                    $video = $data['items'][0];
-                    $title = $video['snippet']['title'];
-                    $duration = $video['contentDetails']['duration'];
-                    $views = isset($video['statistics']['viewCount']) ? (int)$video['statistics']['viewCount'] : 0;
-                    $published_at = strtotime($video['snippet']['publishedAt']);
-                    $six_months_ago = strtotime('-6 months');
-                    
-                    if (strpos(strtolower($title), '[moved]') !== false ||
-                        $views < 100 && $published_at < $six_months_ago || //change 100 to your preferred view count.
-                        preg_match('/PT([0-9]{1,2})M?([0-9]{1,2})?S?/', $duration, $time_matches) && ($time_matches[1] == 0 && (!isset($time_matches[2]) || $time_matches[2] < 60))) {
-                        $scanned[] = "<a href='" . get_edit_post_link($post->ID) . "' target='_blank'>Edit Post: " . esc_html($post->post_title) . "</a> - Video ID: " . esc_html($video_id);
+            function scanPosts(offset) {
+                $.post(ajaxurl, {action: 'start_scan', offset: offset}, function(response) {
+                    $('#scan_results').append(response.html);
+                    if (response.next_offset !== false) {
+                        scanPosts(response.next_offset);
                     }
+                }, 'json');
+            }
+        });
+        </script>
+        <?php
+    }
+
+    public function save_api_key() {
+        if (isset($_POST['api_key'])) {
+            update_option($this->option_name, sanitize_text_field($_POST['api_key']));
+            wp_send_json_success('API Key saved.');
+        }
+        wp_die();
+    }
+
+    public function start_scan() {
+        global $wpdb;
+        $offset = isset($_POST['offset']) ? intval($_POST['offset']) : 0;
+        $limit = 50;
+        $posts = $wpdb->get_results($wpdb->prepare("SELECT ID, post_title, post_content FROM {$wpdb->posts} WHERE post_status = 'publish' AND post_type = 'post' LIMIT %d OFFSET %d", $limit, $offset));
+        $api_key = get_option($this->option_name, '');
+        if (!$api_key) wp_send_json_error('API Key missing.');
+
+        $results = [];
+        foreach ($posts as $post) {
+            if (preg_match_all('/(youtube.com\/watch\?v=|youtu.be\/|googlevideo.com\/videoplayback\?id=)([\w-]+)/', $post->post_content, $matches)) {
+                foreach ($matches[2] as $video_id) {
+                    $video_data = $this->get_youtube_data($video_id, $api_key);
+                    $status = $this->determine_status($video_data);
+                    $color = $this->get_status_color($status);
+                    $title = esc_html($post->post_title);
+                    $edit_link = get_edit_post_link($post->ID);
+                    $results[] = "<p style='color: $color;'><a href='$edit_link'>$title</a> - $status</p>";
                 }
             }
         }
-        $scanned[] = "Scanned post: " . esc_html($post->post_title);
-        usleep(50000);
+
+        wp_send_json(['html' => implode('', $results), 'next_offset' => count($posts) < $limit ? false : $offset + $limit]);
     }
-    
-    wp_send_json_success(['done' => false, 'offset' => $offset + $posts_per_batch, 'scanned' => $scanned]);
-});
+
+    private function get_youtube_data($video_id, $api_key) {
+        $url = "https://www.googleapis.com/youtube/v3/videos?id=$video_id&part=snippet,contentDetails,status,statistics&key=$api_key";
+        $response = wp_remote_get($url);
+        if (is_wp_error($response)) return null;
+        $data = json_decode(wp_remote_retrieve_body($response), true);
+        return $data['items'][0] ?? null;
+    }
+
+    private function determine_status($video_data) {
+        if (!$video_data) return 'UNKNOWN';
+        $snippet = $video_data['snippet'];
+        $status = $video_data['status'];
+        $stats = $video_data['statistics'];
+
+        if (strtotime($snippet['publishedAt']) < strtotime('-6 months') && ($stats['viewCount'] ?? 0) < 100) {
+            return 'LOW VIEWS';
+        }
+        if ($status['privacyStatus'] === 'private' || $status['privacyStatus'] === 'unlisted') {
+            return 'PRIVATE';
+        }
+        if ($status['uploadStatus'] === 'deleted') {
+            return 'DELETED';
+        }
+        if (stripos($snippet['title'], '[moved]') !== false) {
+            return 'MOVED';
+        }
+        if (($stats['dislikeCount'] ?? 0) > 5) {
+            return 'SHITTY';
+        }
+        return 'GOOD';
+    }
+
+    private function get_status_color($status) {
+        switch ($status) {
+            case 'LOW VIEWS': return 'purple';
+            case 'PRIVATE': return 'red';
+            case 'DELETED': return 'bold red';
+            case 'MOVED': return 'orange';
+            case 'SHITTY': return 'brown';
+            case 'GOOD': return 'bold green';
+            default: return 'bold green';
+        }
+    }
+}
+
+new YouTubePostScanner();
