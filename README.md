@@ -11,7 +11,11 @@ To use:
 5.  Press Start Scan.  Any posts containing videos that are missing, broken, low-view, or have a high dislike count will be linked in the results list.
 
 if post > 6 months AND viewCount < 100, the status will be LOW VIEWS and colored purple
+
 if privacyStatus = private or unlisted the status will be PRIVATE and colored red
+
 if uploadStatus = deleted, the status will be DELETED and be colored BOLD RED
+
 if title contains "[moved]" or "[Moved]" (without the quotes), the status should be Moved and colored orange <--site specific to me and I'm not going to bother removing it.
+
 if dislikeCount > 5, the status should be shitty and colored brown <--shitty will be changed in the next version.
