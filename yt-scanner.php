@@ -126,13 +126,13 @@ class YouTubePostScanner {
 
     private function get_status_color($status) {
         switch ($status) {
-            case 'LOW VIEWS': return 'purple';
-            case 'PRIVATE': return 'red';
-            case 'DELETED': return 'bold red';
-            case 'MOVED': return 'orange';
-            case 'SHITTY': return 'brown';
-            case 'GOOD': return 'bold green';
-            default: return 'bold green';
+            case 'LOW VIEWS': return '#c500db';
+            case 'PRIVATE': return '#d95050';
+            case 'DELETED': return '#f00000';
+            case 'MOVED': return '#ff9900';
+            case 'SHITTY': return '#825005';
+            case 'GOOD': return '#19d600';
+            default: return '#000';
         }
     }
 }
